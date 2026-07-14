@@ -1,0 +1,13 @@
+* text=auto
+
+*.go text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.manifest text eol=lf
+*.bat text eol=crlf
+
+*.ico binary
+*.png binary
+*.syso binary

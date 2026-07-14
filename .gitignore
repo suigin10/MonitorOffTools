@@ -1,0 +1,23 @@
+# Build output
+MonitorOffTools.exe
+*.exe
+*.zip
+*.sha256
+SHA256SUMS.txt
+
+dist/
+release/
+
+# Go
+*.test
+*.out
+coverage.out
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+Desktop.ini
