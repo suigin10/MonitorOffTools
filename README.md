@@ -21,6 +21,8 @@ MonitorOffToolsは、接続台数を問わず、すべてのモニターをタ�
 - タスクトレイに常駐
 - トレイアイコンを左クリックすると、2秒後にすべてのモニターをオフ
 - 左クリック連打と右クリックメニューからの重複実行を防止
+- マウスで復帰させたクリックがトレイ操作として誤認されるのを防止
+- 消灯前の通知は無音で表示し、復帰時に通知音だけ鳴る現象を防止
 - キーボード入力またはマウス操作で復帰
 - アプリがモニターをオフにした後、意図しない再点灯に備えて30分ごとにOFF命令を再送
 - キーボード・マウス入力による復帰を検出すると、その回の再点灯防止監視を停止
@@ -51,6 +53,8 @@ ZIPを展開し、`MonitorOffTools.exe` を任意のフォルダーへ置いて�
 2秒後にすべてのモニターをオフにし、再点灯防止監視を開始します。
 
 最初の操作を受け付けてから、2秒の待機とモニターOFF命令送信後のクールダウンが終わるまで、追加の左クリックや右クリックからの消灯操作は無視されます。連打によって複数の消灯処理が予約されることはありません。
+
+マウスクリックでモニターを復帰させた場合、そのクリックがトレイアイコンの左クリックとして続けて届くことがあります。MonitorOffToolsは復帰直後のクリックを消費し、通知や新しい消灯予約が発生しないようにします。
 
 #### 右クリック
 
@@ -137,6 +141,8 @@ It is distributed as a standalone Windows x64 executable and does not require th
 - Runs in the system tray
 - Left-click the tray icon to turn off all monitors after two seconds
 - Prevents repeated left-clicks and duplicate monitor-off actions from the tray menu
+- Prevents a mouse click used to wake the displays from being misinterpreted as a new tray action
+- Shows the pre-off notification silently to prevent a delayed notification sound after wake
 - Wake the monitors with keyboard or mouse input
 - Re-sends the monitor-off command every 30 minutes after the app turns the monitors off, helping counter unintended wake-ups
 - Stops the current wake-prevention monitoring session when keyboard or mouse input is detected
@@ -167,6 +173,8 @@ Extract the ZIP, place `MonitorOffTools.exe` in any folder, and run it. No insta
 Turns off all monitors after two seconds and starts the wake-prevention monitoring session.
 
 After the first action is accepted, additional left-clicks and tray-menu monitor-off commands are ignored until the two-second delay and the post-command cooldown have completed. Repeated clicks cannot queue multiple monitor-off actions.
+
+A mouse click used to wake the displays is consumed during the wake guard period, so it does not create a new monitor-off notification or action. The pre-off notification is silent.
 
 #### Right click
 

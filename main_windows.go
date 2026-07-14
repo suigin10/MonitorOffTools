@@ -37,6 +37,7 @@ const (
 
 	monitorOffDelayMS    = 2_000
 	monitorOffCooldownMS = 2_000
+	wakeInputGuardMS     = 1_500
 	protectionPeriodMS   = 30 * 60 * 1_000
 	wakeDetectionMS      = 250
 	autoOffCheckMS       = 1_000
@@ -45,11 +46,12 @@ const (
 	nimModify = 0x00000001
 	nimDelete = 0x00000002
 
-	nifMessage = 0x00000001
-	nifIcon    = 0x00000002
-	nifTip     = 0x00000004
-	nifInfo    = 0x00000010
-	niifInfo   = 0x00000001
+	nifMessage  = 0x00000001
+	nifIcon     = 0x00000002
+	nifTip      = 0x00000004
+	nifInfo     = 0x00000010
+	niifInfo    = 0x00000001
+	niifNoSound = 0x00000010
 
 	mfString    = 0x00000000
 	mfGrayed    = 0x00000001
@@ -230,17 +232,18 @@ var (
 )
 
 type application struct {
-	hwnd                uintptr
-	hInstance           uintptr
-	icon                uintptr
-	iconOwned           bool
-	monitorOffPending   bool
-	monitorOffLocked    bool
-	pendingAutomatic    bool
-	protectionActive    bool
-	inputTickAtOff      uint32
-	inputTickAtSchedule uint32
-	autoOffMinutes      int
+	hwnd                  uintptr
+	hInstance             uintptr
+	icon                  uintptr
+	iconOwned             bool
+	monitorOffPending     bool
+	monitorOffLocked      bool
+	pendingAutomatic      bool
+	protectionActive      bool
+	inputTickAtOff        uint32
+	inputTickAtSchedule   uint32
+	manualOffBlockedUntil uint32
+	autoOffMinutes        int
 }
 
 func main() {
@@ -361,6 +364,15 @@ func (a *application) scheduleMonitorOff(automatic bool) {
 		return
 	}
 
+	if !automatic {
+		// マウスでモニターを復帰させたクリックが、トレイアイコンの
+		// 左クリックとして続けて届くことがあります。そのクリックでは
+		// 消灯通知や新しい消灯予約を発生させません。
+		if a.consumeWakeInputBeforeManualOff() || a.manualOffTemporarilyBlocked() {
+			return
+		}
+	}
+
 	if automatic {
 		tick, ok := getLastInputTick()
 		if !ok {
@@ -377,7 +389,9 @@ func (a *application) scheduleMonitorOff(automatic bool) {
 	a.updateTooltip()
 
 	if !automatic {
-		a.showNotification("モニターオフ", "すべてのモニターをオフにします。")
+		// モニター消灯中にWindows側へ通知音が保留され、復帰時に
+		// 音だけ再生されることがあるため、この通知だけ無音にします。
+		a.showSilentNotification("モニターオフ", "すべてのモニターをオフにします。")
 	}
 }
 
@@ -472,8 +486,51 @@ func (a *application) detectWakeInput() {
 
 	current, ok := getLastInputTick()
 	if ok && current != a.inputTickAtOff {
-		a.stopProtection()
+		a.handleUserWake()
 	}
+}
+
+func (a *application) consumeWakeInputBeforeManualOff() bool {
+	if !a.protectionActive {
+		return false
+	}
+
+	current, ok := getLastInputTick()
+	if !ok || current == a.inputTickAtOff {
+		return false
+	}
+
+	// 復帰検出タイマーより先にトレイクリック通知が届いた場合も、
+	// ここで復帰入力として処理し、そのクリックを消費します。
+	a.handleUserWake()
+	return true
+}
+
+func (a *application) handleUserWake() {
+	// 消灯前に表示したバルーン通知がWindows側に残っている場合があるため、
+	// 復帰時に明示的に消去します。
+	a.clearNotification()
+	a.blockManualOffAfterWake()
+	a.stopProtection()
+}
+
+func (a *application) blockManualOffAfterWake() {
+	a.manualOffBlockedUntil = getTickCount() + wakeInputGuardMS
+}
+
+func (a *application) manualOffTemporarilyBlocked() bool {
+	until := a.manualOffBlockedUntil
+	if until == 0 {
+		return false
+	}
+
+	now := getTickCount()
+	if int32(now-until) < 0 {
+		return true
+	}
+
+	a.manualOffBlockedUntil = 0
+	return false
 }
 
 func (a *application) onProtectionInterval() {
@@ -511,7 +568,7 @@ func (a *application) showContextMenu() {
 	defer procDestroyMenu.Call(menu)
 
 	turnOffFlags := uint32(mfString)
-	if a.monitorOffLocked {
+	if a.monitorOffLocked || a.manualOffTemporarilyBlocked() {
 		turnOffFlags |= mfGrayed
 	}
 	appendMenu(menu, turnOffFlags, cmdTurnOff, "モニターをオフ")
@@ -703,6 +760,14 @@ func (a *application) updateTooltip() {
 }
 
 func (a *application) showNotification(title, text string) {
+	a.showNotificationWithFlags(title, text, niifInfo)
+}
+
+func (a *application) showSilentNotification(title, text string) {
+	a.showNotificationWithFlags(title, text, niifInfo|niifNoSound)
+}
+
+func (a *application) showNotificationWithFlags(title, text string, flags uint32) {
 	if a.hwnd == 0 {
 		return
 	}
@@ -711,10 +776,26 @@ func (a *application) showNotification(title, text string) {
 		HWnd:        a.hwnd,
 		UID:         1,
 		UFlags:      nifInfo,
-		DwInfoFlags: niifInfo,
+		DwInfoFlags: flags,
 	}
 	copyUTF16(nid.SzInfoTitle[:], title)
 	copyUTF16(nid.SzInfo[:], text)
+	procShellNotifyIconW.Call(nimModify, uintptr(unsafe.Pointer(&nid)))
+}
+
+func (a *application) clearNotification() {
+	if a.hwnd == 0 {
+		return
+	}
+
+	// NIF_INFOを指定し、通知本文を空にして現在のバルーンを閉じます。
+	nid := notifyIconData{
+		CbSize:      uint32(unsafe.Sizeof(notifyIconData{})),
+		HWnd:        a.hwnd,
+		UID:         1,
+		UFlags:      nifInfo,
+		DwInfoFlags: niifNoSound,
+	}
 	procShellNotifyIconW.Call(nimModify, uintptr(unsafe.Pointer(&nid)))
 }
 

@@ -4,6 +4,9 @@ All notable changes to MonitorOffTools are documented in this file.
 
 ## [1.0.0] - 2026-07-14
 
+- マウス復帰時のクリックがトレイ左クリックとして誤処理される問題を修正
+- モニター復帰時に消灯通知の音だけ鳴ることがある問題を修正
+
 ### Added
 
 - System-tray operation for Windows 11 x64.
