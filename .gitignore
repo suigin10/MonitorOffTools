@@ -21,3 +21,6 @@ coverage.out
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Local portable settings
+MonitorOffTools.ini

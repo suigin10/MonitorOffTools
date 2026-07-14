@@ -2,10 +2,22 @@
 
 All notable changes to MonitorOffTools are documented in this file.
 
-## [1.0.0] - 2026-07-14
+## [1.1.0] - 2026-07-14
 
-- マウス復帰時のクリックがトレイ左クリックとして誤処理される問題を修正
-- モニター復帰時に消灯通知の音だけ鳴ることがある問題を修正
+### Added
+
+- Japanese / English UI switching without restarting the app.
+- Optional left-click monitor-off action to reduce accidental activation.
+- Portable `MonitorOffTools.ini` settings file beside the executable.
+- Automatic migration of compatible v1.0.0 registry settings when no INI file exists.
+
+### Changed
+
+- App preferences are now stored in the INI file instead of the registry.
+- Windows startup registration continues to use the current user's Run registry key.
+- GitHub Actions no longer enables an unnecessary Go module cache for this dependency-free project.
+
+## [1.0.0] - 2026-07-14
 
 ### Added
 
@@ -20,3 +32,8 @@ All notable changes to MonitorOffTools are documented in this file.
 - Single-instance protection.
 - Shortcut to Windows display power settings.
 - Japanese and English documentation.
+
+### Fixed
+
+- Prevented a wake-up mouse click from being treated as another tray-icon monitor-off action.
+- Prevented the monitor-off notification sound from being played after the displays wake.

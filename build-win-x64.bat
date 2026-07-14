@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 
-echo Building MonitorOffTools v1.0.0...
+echo Building MonitorOffTools v1.1.0...
 where go >nul 2>nul
 if errorlevel 1 (
   echo Go is not installed or not available in PATH.

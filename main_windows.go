@@ -63,11 +63,12 @@ const (
 	tpmNonotify    = 0x0080
 	tpmReturnCmd   = 0x0100
 
-	cmdTurnOff       = 1001
-	cmdStatus        = 1002
-	cmdStartup       = 1003
-	cmdExit          = 1004
-	cmdPowerSettings = 1005
+	cmdTurnOff         = 1001
+	cmdStatus          = 1002
+	cmdStartup         = 1003
+	cmdExit            = 1004
+	cmdPowerSettings   = 1005
+	cmdToggleLeftClick = 1006
 
 	cmdAutoNone = 1100
 	cmdAuto15   = 1101
@@ -75,6 +76,9 @@ const (
 	cmdAuto45   = 1103
 	cmdAuto60   = 1104
 	cmdAuto120  = 1105
+
+	cmdLanguageJapanese = 1200
+	cmdLanguageEnglish  = 1201
 
 	smtoAbortIfHung = 0x0002
 	smtoErrorOnExit = 0x0020
@@ -232,18 +236,22 @@ var (
 )
 
 type application struct {
-	hwnd                  uintptr
-	hInstance             uintptr
-	icon                  uintptr
-	iconOwned             bool
-	monitorOffPending     bool
-	monitorOffLocked      bool
-	pendingAutomatic      bool
-	protectionActive      bool
-	inputTickAtOff        uint32
-	inputTickAtSchedule   uint32
-	manualOffBlockedUntil uint32
-	autoOffMinutes        int
+	hwnd                     uintptr
+	hInstance                uintptr
+	icon                     uintptr
+	iconOwned                bool
+	monitorOffPending        bool
+	monitorOffLocked         bool
+	pendingAutomatic         bool
+	protectionActive         bool
+	inputTickAtOff           uint32
+	inputTickAtSchedule      uint32
+	manualOffBlockedUntil    uint32
+	autoOffMinutes           int
+	language                 string
+	leftClickEnabled         bool
+	powerConflictNoticeShown bool
+	settingsPath             string
 }
 
 func main() {
@@ -258,7 +266,7 @@ func main() {
 	}
 
 	if err := app.run(); err != nil {
-		messageBox("起動に失敗しました。\n\n" + err.Error())
+		messageBox(app.tr("startupFailed") + "\n\n" + err.Error())
 	}
 }
 
@@ -269,7 +277,12 @@ func (a *application) run() error {
 	}
 	a.hInstance = hInstance
 	a.icon, a.iconOwned = loadMonitorIcon()
-	a.autoOffMinutes = loadAutoOffMinutes()
+	settings, settingsPath, settingsErr := loadAppSettings()
+	a.autoOffMinutes = settings.AutoOffMinutes
+	a.language = settings.Language
+	a.leftClickEnabled = settings.LeftClickEnabled
+	a.powerConflictNoticeShown = settings.PowerConflictNoticeShown
+	a.settingsPath = settingsPath
 	migrateLegacyStartup()
 
 	className := mustUTF16Ptr(windowClass)
@@ -303,6 +316,9 @@ func (a *application) run() error {
 
 	taskbarCreatedMessage = registerWindowMessage("TaskbarCreated")
 	a.addTrayIcon()
+	if settingsErr != nil {
+		messageBox(a.tr("settingsLoadFailed") + "\n\n" + settingsErr.Error())
+	}
 	procSetTimer.Call(a.hwnd, timerAutoOffCheck, autoOffCheckMS, 0)
 	if a.autoOffMinutes != 0 {
 		a.showPowerConflictNoticeOnce()
@@ -337,7 +353,9 @@ func windowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 	case wmTrayCallback:
 		switch uint32(lParam) {
 		case wmLButtonUp:
-			app.scheduleMonitorOff(false)
+			if app.leftClickEnabled {
+				app.scheduleMonitorOff(false)
+			}
 		case wmRButtonUp, wmContextMenu:
 			app.showContextMenu()
 		}
@@ -391,7 +409,7 @@ func (a *application) scheduleMonitorOff(automatic bool) {
 	if !automatic {
 		// モニター消灯中にWindows側へ通知音が保留され、復帰時に
 		// 音だけ再生されることがあるため、この通知だけ無音にします。
-		a.showSilentNotification("モニターオフ", "すべてのモニターをオフにします。")
+		a.showSilentNotification(a.tr("notifyMonitorOffTitle"), a.tr("notifyMonitorOffBody"))
 	}
 }
 
@@ -463,7 +481,7 @@ func (a *application) startProtectionAndTurnOff() {
 	if !ok {
 		turnOffAllMonitors()
 		a.updateTooltip()
-		a.showNotification(appName, "入力状態を取得できないため、再点灯防止監視を開始できませんでした。")
+		a.showNotification(appName, a.tr("notifyInputUnavailable"))
 		return
 	}
 
@@ -571,31 +589,52 @@ func (a *application) showContextMenu() {
 	if a.monitorOffLocked || a.manualOffTemporarilyBlocked() {
 		turnOffFlags |= mfGrayed
 	}
-	appendMenu(menu, turnOffFlags, cmdTurnOff, "モニターをオフ")
+	appendMenu(menu, turnOffFlags, cmdTurnOff, a.tr("menuTurnOff"))
 	appendMenu(menu, mfString|mfGrayed, cmdStatus, a.statusText())
 	appendMenu(menu, mfSeparator, 0, "")
 
 	autoMenu, _, _ := procCreatePopupMenu.Call()
 	if autoMenu != 0 {
-		a.appendAutoOffMenuItem(autoMenu, cmdAutoNone, 0, "なし")
-		a.appendAutoOffMenuItem(autoMenu, cmdAuto15, 15, "15分")
-		a.appendAutoOffMenuItem(autoMenu, cmdAuto30, 30, "30分")
-		a.appendAutoOffMenuItem(autoMenu, cmdAuto45, 45, "45分")
-		a.appendAutoOffMenuItem(autoMenu, cmdAuto60, 60, "1時間")
-		a.appendAutoOffMenuItem(autoMenu, cmdAuto120, 120, "2時間")
-		appendMenu(menu, mfPopup, autoMenu, "自動モニターオフ")
+		a.appendAutoOffMenuItem(autoMenu, cmdAutoNone, 0, a.tr("menuNone"))
+		a.appendAutoOffMenuItem(autoMenu, cmdAuto15, 15, a.tr("menu15Minutes"))
+		a.appendAutoOffMenuItem(autoMenu, cmdAuto30, 30, a.tr("menu30Minutes"))
+		a.appendAutoOffMenuItem(autoMenu, cmdAuto45, 45, a.tr("menu45Minutes"))
+		a.appendAutoOffMenuItem(autoMenu, cmdAuto60, 60, a.tr("menu1Hour"))
+		a.appendAutoOffMenuItem(autoMenu, cmdAuto120, 120, a.tr("menu2Hours"))
+		appendMenu(menu, mfPopup, autoMenu, a.tr("menuAutoOff"))
 	}
 
-	appendMenu(menu, mfString, cmdPowerSettings, "Windowsの画面オフ設定を開く")
+	leftClickFlags := uint32(mfString)
+	if a.leftClickEnabled {
+		leftClickFlags |= mfChecked
+	}
+	appendMenu(menu, leftClickFlags, cmdToggleLeftClick, a.tr("menuLeftClick"))
+
+	languageMenu, _, _ := procCreatePopupMenu.Call()
+	if languageMenu != 0 {
+		japaneseFlags := uint32(mfString)
+		englishFlags := uint32(mfString)
+		if a.language == languageJapanese {
+			japaneseFlags |= mfChecked
+		} else {
+			englishFlags |= mfChecked
+		}
+		appendMenu(languageMenu, japaneseFlags, cmdLanguageJapanese, a.tr("menuJapanese"))
+		appendMenu(languageMenu, englishFlags, cmdLanguageEnglish, a.tr("menuEnglish"))
+		appendMenu(menu, mfPopup, languageMenu, a.tr("menuLanguage"))
+	}
+
+	appendMenu(menu, mfSeparator, 0, "")
+	appendMenu(menu, mfString, cmdPowerSettings, a.tr("menuPowerSettings"))
 	appendMenu(menu, mfSeparator, 0, "")
 
-	startupText := "スタートアップに登録"
+	startupText := a.tr("menuStartupAdd")
 	if startupEnabled() {
-		startupText = "スタートアップ登録を解除"
+		startupText = a.tr("menuStartupRemove")
 	}
 	appendMenu(menu, mfString, cmdStartup, startupText)
 	appendMenu(menu, mfSeparator, 0, "")
-	appendMenu(menu, mfString, cmdExit, "終了")
+	appendMenu(menu, mfString, cmdExit, a.tr("menuExit"))
 
 	var pt point
 	procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
@@ -623,8 +662,14 @@ func (a *application) showContextMenu() {
 		a.setAutoOffMinutes(60)
 	case cmdAuto120:
 		a.setAutoOffMinutes(120)
+	case cmdToggleLeftClick:
+		a.toggleLeftClick()
+	case cmdLanguageJapanese:
+		a.setLanguage(languageJapanese)
+	case cmdLanguageEnglish:
+		a.setLanguage(languageEnglish)
 	case cmdPowerSettings:
-		openPowerSettings()
+		a.openPowerSettings()
 	case cmdStartup:
 		a.toggleStartup()
 	case cmdExit:
@@ -645,7 +690,13 @@ func (a *application) setAutoOffMinutes(minutes int) {
 		return
 	}
 
+	previous := a.autoOffMinutes
 	a.autoOffMinutes = minutes
+	if err := a.saveSettings(); err != nil {
+		a.autoOffMinutes = previous
+		messageBox(a.tr("settingsSaveFailed") + "\n\n" + err.Error())
+		return
+	}
 
 	// 「なし」へ変更した時点で、自動消灯の2秒待機中なら取り消します。
 	// 左クリックなどによる手動消灯の待機は取り消しません。
@@ -656,16 +707,54 @@ func (a *application) setAutoOffMinutes(minutes int) {
 		a.releaseMonitorOffLock()
 	}
 
-	if err := saveAutoOffMinutes(minutes); err != nil {
-		messageBox("自動モニターオフ設定の保存に失敗しました。\n\n" + err.Error())
+	a.updateTooltip()
+	a.showNotification(a.tr("notifyAutoTitle"), fmt.Sprintf(a.tr("notifyAutoChanged"), formatMinutes(a.language, minutes)))
+	if minutes != 0 {
+		a.showPowerConflictNoticeOnce()
+	}
+}
+
+func (a *application) toggleLeftClick() {
+	previous := a.leftClickEnabled
+	a.leftClickEnabled = !a.leftClickEnabled
+	if err := a.saveSettings(); err != nil {
+		a.leftClickEnabled = previous
+		messageBox(a.tr("settingsSaveFailed") + "\n\n" + err.Error())
+		return
+	}
+
+	text := a.tr("notifyLeftClickDisabled")
+	if a.leftClickEnabled {
+		text = a.tr("notifyLeftClickEnabled")
+	}
+	a.updateTooltip()
+	a.showNotification(a.tr("notifyLeftClickTitle"), text)
+}
+
+func (a *application) setLanguage(language string) {
+	if !isValidLanguage(language) || a.language == language {
+		return
+	}
+
+	previous := a.language
+	a.language = language
+	if err := a.saveSettings(); err != nil {
+		a.language = previous
+		messageBox(a.tr("settingsSaveFailed") + "\n\n" + err.Error())
 		return
 	}
 
 	a.updateTooltip()
-	a.showNotification("自動モニターオフ", formatMinutes(minutes)+"に変更しました。")
-	if minutes != 0 {
-		a.showPowerConflictNoticeOnce()
-	}
+	a.showNotification(a.tr("notifyLanguageTitle"), a.tr("notifyLanguageChanged"))
+}
+
+func (a *application) saveSettings() error {
+	return saveAppSettings(a.settingsPath, appSettings{
+		Language:                 a.language,
+		LeftClickEnabled:         a.leftClickEnabled,
+		AutoOffMinutes:           a.autoOffMinutes,
+		PowerConflictNoticeShown: a.powerConflictNoticeShown,
+	})
 }
 
 func (a *application) toggleStartup() {
@@ -673,17 +762,17 @@ func (a *application) toggleStartup() {
 	if startupEnabled() {
 		err = disableStartup()
 		if err == nil {
-			a.showNotification("スタートアップ", "スタートアップ登録を解除しました。")
+			a.showNotification(a.tr("notifyStartupTitle"), a.tr("notifyStartupRemoved"))
 		}
 	} else {
 		err = enableStartup()
 		if err == nil {
-			a.showNotification("スタートアップ", "Windowsログオン時に起動するよう登録しました。")
+			a.showNotification(a.tr("notifyStartupTitle"), a.tr("notifyStartupAdded"))
 		}
 	}
 
 	if err != nil {
-		messageBox("スタートアップ設定の変更に失敗しました。\n\n" + err.Error())
+		messageBox(a.tr("startupChangeFailed") + "\n\n" + err.Error())
 	}
 }
 
@@ -698,22 +787,26 @@ func (a *application) shutdown() {
 
 func (a *application) statusText() string {
 	if a.monitorOffPending {
-		return "状態: 2秒後にモニターオフ"
+		return a.tr("statusPending")
 	}
 	if a.protectionActive {
-		return "状態: 再点灯防止監視中（30分固定）"
+		return a.tr("statusProtection")
 	}
-	return "状態: 待機中 / 自動オフ " + formatMinutes(a.autoOffMinutes)
+	return fmt.Sprintf(a.tr("statusIdle"), formatMinutes(a.language, a.autoOffMinutes))
 }
 
 func (a *application) tooltipText() string {
 	if a.monitorOffPending {
-		return appName + " - 2秒後に消灯"
+		return fmt.Sprintf(a.tr("tooltipPending"), appName)
 	}
 	if a.protectionActive {
-		return appName + " - 再点灯防止監視中"
+		return fmt.Sprintf(a.tr("tooltipProtection"), appName)
 	}
-	return appName + " - 自動オフ " + formatMinutes(a.autoOffMinutes)
+	return fmt.Sprintf(a.tr("tooltipIdle"), appName, formatMinutes(a.language, a.autoOffMinutes))
+}
+
+func (a *application) tr(key string) string {
+	return translate(a.language, key)
 }
 
 func (a *application) addTrayIcon() {
@@ -927,54 +1020,17 @@ func isValidAutoOffMinutes(minutes int) bool {
 	}
 }
 
-func formatMinutes(minutes int) string {
-	switch minutes {
-	case 0:
-		return "なし"
-	case 60:
-		return "1時間"
-	case 120:
-		return "2時間"
-	default:
-		return fmt.Sprintf("%d分", minutes)
-	}
-}
-
-func loadAutoOffMinutes() int {
-	value, ok := readSettingsDWORD(autoOffValueName)
-	if ok && isValidAutoOffMinutes(int(value)) {
-		return int(value)
-	}
-	return defaultAutoOffMinutes
-}
-
-func saveAutoOffMinutes(minutes int) error {
-	return writeSettingsDWORD(autoOffValueName, uint32(minutes))
-}
-
 func (a *application) showPowerConflictNoticeOnce() {
-	if value, ok := readSettingsDWORD(conflictNoticeValueName); ok && value != 0 {
+	if a.powerConflictNoticeShown {
 		return
 	}
 
-	a.showNotification(
-		"Windows省電力との競合防止",
-		"本アプリの自動オフを使う場合、Windows標準の画面オフは「なし」または本アプリより長い時間を推奨します。",
-	)
-	_ = writeSettingsDWORD(conflictNoticeValueName, 1)
-}
-
-func readSettingsDWORD(valueName string) (uint32, bool) {
-	if value, ok := readSettingsDWORDAt(settingsKeyPath, valueName); ok {
-		return value, true
+	a.showNotification(a.tr("powerConflictTitle"), a.tr("powerConflictBody"))
+	a.powerConflictNoticeShown = true
+	if err := a.saveSettings(); err != nil {
+		a.powerConflictNoticeShown = false
+		messageBox(a.tr("settingsSaveFailed") + "\n\n" + err.Error())
 	}
-
-	// v1.0.0の旧設定を引き継ぎます。
-	value, ok := readSettingsDWORDAt(legacySettingsKeyPath, valueName)
-	if ok {
-		_ = writeSettingsDWORD(valueName, value)
-	}
-	return value, ok
 }
 
 func readSettingsDWORDAt(keyPath, valueName string) (uint32, bool) {
@@ -1005,40 +1061,7 @@ func readSettingsDWORDAt(keyPath, valueName string) (uint32, bool) {
 	return value, ret == 0 && valueType == regDWORD && size == 4
 }
 
-func writeSettingsDWORD(valueName string, value uint32) error {
-	var key uintptr
-	var disposition uint32
-	ret, _, _ := procRegCreateKeyExW.Call(
-		hkeyCurrentUser,
-		uintptr(unsafe.Pointer(mustUTF16Ptr(settingsKeyPath))),
-		0,
-		0,
-		regOptionNonVolatile,
-		keySetValue,
-		0,
-		uintptr(unsafe.Pointer(&key)),
-		uintptr(unsafe.Pointer(&disposition)),
-	)
-	if ret != 0 {
-		return fmt.Errorf("RegCreateKeyExW error: %d", ret)
-	}
-	defer procRegCloseKey.Call(key)
-
-	ret, _, _ = procRegSetValueExW.Call(
-		key,
-		uintptr(unsafe.Pointer(mustUTF16Ptr(valueName))),
-		0,
-		regDWORD,
-		uintptr(unsafe.Pointer(&value)),
-		4,
-	)
-	if ret != 0 {
-		return fmt.Errorf("RegSetValueExW error: %d", ret)
-	}
-	return nil
-}
-
-func openPowerSettings() {
+func (a *application) openPowerSettings() {
 	ret, _, _ := procShellExecuteW.Call(
 		0,
 		uintptr(unsafe.Pointer(mustUTF16Ptr("open"))),
@@ -1048,7 +1071,7 @@ func openPowerSettings() {
 		1,
 	)
 	if ret <= 32 {
-		messageBox("Windowsの電源設定を開けませんでした。")
+		messageBox(a.tr("openPowerSettingsFailed"))
 	}
 }
 
