@@ -528,6 +528,12 @@ func (a *application) handleUserWake() {
 	// 消灯前に表示したバルーン通知がWindows側に残っている場合があるため、
 	// 復帰時に明示的に消去します。
 	a.clearNotification()
+
+	// 入力検出だけに復帰を任せると、GPU・接続方式・モニターによっては
+	// 最初のキー入力やマウス操作だけでは表示が復帰しない場合があります。
+	// 復帰入力を検出した時点で明示的にMONITORPOWER ONも送ります。
+	turnOnAllMonitors()
+
 	a.blockManualOffAfterWake()
 	a.stopProtection()
 }
@@ -890,6 +896,19 @@ func (a *application) clearNotification() {
 		DwInfoFlags: niifNoSound,
 	}
 	procShellNotifyIconW.Call(nimModify, uintptr(unsafe.Pointer(&nid)))
+}
+
+func turnOnAllMonitors() {
+	var result uintptr
+	procSendMessageTimeoutW.Call(
+		uintptr(0xFFFF),
+		wmSysCommand,
+		scMonitorPower,
+		^uintptr(0), // -1 = power on
+		smtoAbortIfHung|smtoErrorOnExit,
+		1000,
+		uintptr(unsafe.Pointer(&result)),
+	)
 }
 
 func turnOffAllMonitors() {
